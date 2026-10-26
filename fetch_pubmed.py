@@ -89,10 +89,13 @@ DATA_FILE = Path("publications.csv")
 
 
 def search_pubmed(query, days=14):
-    """Find PMIDs added to PubMed recently."""
+    """Retrieve all matching PMIDs using pagination."""
 
     end_date = datetime.now(timezone.utc).date()
     start_date = end_date - timedelta(days=days)
+
+    all_ids = []
+    batch_size = 500
 
     params = {
         "db": "pubmed",
@@ -100,11 +103,12 @@ def search_pubmed(query, days=14):
         "datetype": "edat",
         "mindate": start_date.isoformat(),
         "maxdate": end_date.isoformat(),
-        "retmax": 1000,
         "retmode": "json",
+        "retmax": 0,
         "tool": "CardioEvidence"
     }
 
+    # First, find the total number of matching articles
     response = requests.get(
         f"{BASE_URL}/esearch.fcgi",
         params=params,
@@ -113,18 +117,39 @@ def search_pubmed(query, days=14):
 
     response.raise_for_status()
 
-    data = response.json()["esearchresult"]
+    total = int(
+        response.json()["esearchresult"]["count"]
+    )
 
-    count = int(data["count"])
-    ids = data["idlist"]
+    print(f"Total matching publications: {total}")
 
-    if count > len(ids):
-        print(
-            f"Warning: {count} results found, "
-            f"but only {len(ids)} retrieved."
+    # Retrieve articles in batches of 500
+    for start in range(0, total, batch_size):
+
+        params["retstart"] = start
+        params["retmax"] = batch_size
+
+        response = requests.get(
+            f"{BASE_URL}/esearch.fcgi",
+            params=params,
+            timeout=30
         )
 
-    return ids
+        response.raise_for_status()
+
+        batch_ids = response.json()[
+            "esearchresult"
+        ]["idlist"]
+
+        all_ids.extend(batch_ids)
+
+        print(
+            f"Retrieved {len(all_ids)} of {total} PMIDs"
+        )
+
+        time.sleep(0.4)
+
+    return list(dict.fromkeys(all_ids))
 
 
 def get_text(element):
