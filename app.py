@@ -10,9 +10,7 @@ st.set_page_config(
 
 st.title("❤️ CardioEvidence")
 
-st.markdown(
-    "### Your Daily Cardiology Research Update"
-)
+st.markdown("### Your Daily Cardiology Research Update")
 
 st.write(
     "Automatically updated cardiology research "
@@ -28,10 +26,42 @@ if not DATA_FILE.exists():
     )
     st.stop()
 
+# Load publications
 df = pd.read_csv(DATA_FILE).fillna("")
 
-# Sidebar
+# Convert dates
+for column in ["Publication Date", "PubMed Entry Date"]:
+    if column not in df.columns:
+        df[column] = ""
+
+    df[column] = pd.to_datetime(
+        df[column],
+        errors="coerce"
+    )
+
+# -----------------------------
+# SIDEBAR FILTERS
+# -----------------------------
+
 st.sidebar.title("Filters")
+
+date_filter = st.sidebar.selectbox(
+    "Date Range",
+    [
+        "All Publications",
+        "Today",
+        "Last 7 Days",
+        "Last 30 Days"
+    ]
+)
+
+date_type = st.sidebar.radio(
+    "Filter by",
+    [
+        "PubMed Entry Date",
+        "Publication Date"
+    ]
+)
 
 category = st.sidebar.selectbox(
     "Publication Type",
@@ -50,12 +80,35 @@ search = st.sidebar.text_input(
 journal = st.sidebar.selectbox(
     "Journal",
     ["All Journals"] + sorted(
-        df["Journal"].dropna().unique().tolist()
+        df["Journal"].astype(str).unique().tolist()
     )
 )
 
-# Apply filters
+# -----------------------------
+# APPLY FILTERS
+# -----------------------------
+
 filtered = df.copy()
+
+today = pd.Timestamp.now(tz="UTC").tz_localize(None).normalize()
+
+if date_filter == "Today":
+    cutoff = today
+
+elif date_filter == "Last 7 Days":
+    cutoff = today - pd.Timedelta(days=6)
+
+elif date_filter == "Last 30 Days":
+    cutoff = today - pd.Timedelta(days=29)
+
+else:
+    cutoff = None
+
+if cutoff is not None:
+    filtered = filtered[
+        (filtered[date_type] >= cutoff)
+        & (filtered[date_type] < today + pd.Timedelta(days=1))
+    ]
 
 if category != "All Studies":
     filtered = filtered[
@@ -70,11 +123,17 @@ if category != "All Studies":
 if search:
     search_mask = (
         filtered["Title"].str.contains(
-            search, case=False, na=False, regex=False
+            search,
+            case=False,
+            na=False,
+            regex=False
         )
         |
         filtered["Abstract"].str.contains(
-            search, case=False, na=False, regex=False
+            search,
+            case=False,
+            na=False,
+            regex=False
         )
     )
 
@@ -85,7 +144,87 @@ if journal != "All Journals":
         filtered["Journal"] == journal
     ]
 
-# Dashboard metrics
+# -----------------------------
+# SORT NEWEST FIRST
+# -----------------------------
+
+sort_by = st.sidebar.selectbox(
+    "Sort Publications By",
+    [
+        "Newest PubMed Entry",
+        "Newest Publication Date"
+    ]
+)
+
+if sort_by == "Newest Publication Date":
+    sort_column = "Publication Date"
+else:
+    sort_column = "PubMed Entry Date"
+
+filtered = filtered.sort_values(
+    by=[sort_column, "PMID"],
+    ascending=[False, False],
+    na_position="last"
+)
+
+# -----------------------------
+# PAGINATION
+# -----------------------------
+
+results_per_page = st.sidebar.selectbox(
+    "Results Per Page",
+    [25, 50, 100],
+    index=0
+)
+
+total_results = len(filtered)
+
+total_pages = max(
+    1,
+    (total_results + results_per_page - 1)
+    // results_per_page
+)
+
+# Track the current page
+if "page" not in st.session_state:
+    st.session_state.page = 1
+
+# Reset to page 1 when filters change
+filter_signature = (
+    date_filter,
+    date_type,
+    category,
+    search,
+    journal,
+    sort_by,
+    results_per_page
+)
+
+if st.session_state.get("last_filter_signature") != filter_signature:
+    st.session_state.page = 1
+    st.session_state.last_filter_signature = filter_signature
+
+# Ensure the page is valid
+st.session_state.page = min(
+    max(1, st.session_state.page),
+    total_pages
+)
+
+# Select only the articles for this page
+start_index = (
+    st.session_state.page - 1
+) * results_per_page
+
+end_index = start_index + results_per_page
+
+page_articles = filtered.iloc[
+    start_index:end_index
+]
+
+# -----------------------------
+# DASHBOARD METRICS
+# -----------------------------
+
 col1, col2, col3 = st.columns(3)
 
 col1.metric(
@@ -112,41 +251,114 @@ col3.metric(
 st.divider()
 
 st.subheader(
-    f"Publications ({len(filtered)})"
+    f"Publications ({total_results})"
 )
 
-# Display articles
-for _, article in filtered.iterrows():
+# -----------------------------
+# PAGE NAVIGATION
+# -----------------------------
 
-    st.markdown(
-        f"### {article['Title']}"
+def page_navigation(location):
+
+    col1, col2, col3 = st.columns(
+        [1, 2, 1]
     )
 
-    st.write(
-        f"**Journal:** {article['Journal']}"
-    )
+    with col1:
+        if st.button(
+            "⬅ Previous",
+            disabled=st.session_state.page == 1,
+            key=f"previous_{location}"
+        ):
+            st.session_state.page -= 1
+            st.rerun()
 
-    st.write(
-        f"**Year:** {article['Year']}"
-    )
-
-    st.write(
-        f"**Category:** {article['Category']}"
-    )
-
-    with st.expander("Read Abstract"):
-        st.write(
-            article["Abstract"]
-            if article["Abstract"]
-            else "Abstract not available."
+    with col2:
+        st.markdown(
+            f"<div style='text-align:center;'>"
+            f"<strong>Page {st.session_state.page} "
+            f"of {total_pages}</strong>"
+            f"</div>",
+            unsafe_allow_html=True
         )
 
-    st.link_button(
-        "View on PubMed",
-        article["PubMed URL"]
+    with col3:
+        if st.button(
+            "Next ➡",
+            disabled=st.session_state.page == total_pages,
+            key=f"next_{location}"
+        ):
+            st.session_state.page += 1
+            st.rerun()
+
+
+page_navigation("top")
+
+st.divider()
+
+# -----------------------------
+# DISPLAY ARTICLES
+# -----------------------------
+
+if total_results == 0:
+    st.info(
+        "No publications match your filters. "
+        "Try changing your search criteria."
     )
 
-    st.divider()
+else:
+    for _, article in page_articles.iterrows():
+
+        st.markdown(
+            f"### {article['Title']}"
+        )
+
+        st.write(
+            f"**Journal:** {article['Journal']}"
+        )
+
+        st.write(
+            f"**Year:** {article['Year']}"
+        )
+
+        publication_date = article["Publication Date"]
+        entry_date = article["PubMed Entry Date"]
+
+        if pd.notna(publication_date):
+            st.write(
+                f"**Published:** "
+                f"{publication_date.strftime('%B %d, %Y')}"
+            )
+
+        if pd.notna(entry_date):
+            st.write(
+                f"**Added to PubMed:** "
+                f"{entry_date.strftime('%B %d, %Y')}"
+            )
+
+        st.write(
+            f"**Category:** {article['Category']}"
+        )
+
+        with st.expander("Read Abstract"):
+            st.write(
+                article["Abstract"]
+                if article["Abstract"]
+                else "Abstract not available."
+            )
+
+        st.link_button(
+            "View on PubMed",
+            article["PubMed URL"]
+        )
+
+        st.divider()
+
+# -----------------------------
+# BOTTOM NAVIGATION
+# -----------------------------
+
+page_navigation("bottom")
 
 st.caption(
     "Source: PubMed / National Library of Medicine"
