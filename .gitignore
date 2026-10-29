@@ -1,1 +1,21 @@
 __pycache__/
+
+# API secrets
+.env
+.env.*
+!.env.example
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+
+# Local AI screening data
+screening_history.jsonl
+screening_overrides.csv
+sol_review_results.csv
+ai_screening_results*.csv
